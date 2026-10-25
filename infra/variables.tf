@@ -110,3 +110,23 @@ locals {
     var.tags
   )
 }
+
+# Add these declarations to infra/variables.tf
+
+variable "log_retention_days" {
+  type        = number
+  default     = 30
+  description = "CloudWatch log retention in days for PDPA compliance"
+}
+
+variable "kms_key_arn" {
+  type        = string
+  default     = ""
+  description = "KMS Customer Managed Key ARN for encryption at rest"
+}
+
+variable "sre_alert_email" {
+  type        = string
+  default     = "sre-alerts@carelink.health"
+  description = "Target email address for SNS automated alerts"
+}
