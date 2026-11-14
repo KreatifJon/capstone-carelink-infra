@@ -210,6 +210,20 @@ lookup() { # prints the import ID for one resource, or nothing if it does not ex
           return
         fi
       done ;;
+    aws_eks_addon)
+      local cluster addon
+      cluster=$(field "$r" .after.cluster_name)
+      [[ -n "$cluster" ]] || cluster=$CLUSTER
+      addon=$(field "$r" .after.addon_name)
+      [[ -n $(aws_q eks describe-addon --cluster-name "$cluster" --addon-name "$addon" --query addon.addonName) ]] && echo "$cluster:$addon" ;;
+
+    # ---- S3 --------------------------------------------------------------------------
+    aws_s3_bucket)
+      # The bucket's own settings (aws_s3_bucket_<setting>) are adopted in the
+      # second pass, once the bucket name is known.
+      local bucket
+      bucket=$(field "$r" .after.bucket)
+      [[ -n "$bucket" ]] && aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1 && echo "$bucket" ;;
 
     # ---- monitoring --------------------------------------------------------------
     aws_cloudwatch_log_group)
@@ -235,15 +249,23 @@ lookup() { # prints the import ID for one resource, or nothing if it does not ex
       ns=$(field "$r" .after.namespace)
       kube_ready && helm --kubeconfig "$KUBECONFIG_FILE" -n "$ns" status "$name" >/dev/null 2>&1 && echo "$ns/$name" ;;
 
-    # ---- resolved in the second pass, or never imported --------------------------
-    aws_route_table_association | aws_sns_topic_policy) ;;
+    # ---- never imported --------------------------------------------------------------
     aws_ec2_tag) ;; # creating a tag that already exists is harmless
     *) log "  no lookup defined for $type: it will be created (add a case to generate-imports.sh if it already exists)" ;;
   esac
   return 0
 }
 
-lookup_dependent() { # resources whose ID is built from other resources' IDs
+# Resources whose import ID is built from another resource's ID; they are
+# resolved in a second pass, after the resources they belong to.
+is_dependent() {
+  case "$1" in
+    aws_route_table_association | aws_sns_topic_policy | aws_s3_bucket_?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+lookup_dependent() {
   local r=$1 type name index
   type=$(field "$r" .type)
   name=$(field "$r" .name)
@@ -261,6 +283,27 @@ lookup_dependent() { # resources whose ID is built from other resources' IDs
       local arn
       arn=$(resolved "aws_sns_topic.${name}")
       [[ -n "$arn" && -n $(aws_q sns get-topic-attributes --topic-arn "$arn" --query Attributes.Policy) ]] && echo "$arn" ;;
+    aws_s3_bucket_?*)
+      # When the bucket is created in the same run its name is not known in the
+      # plan; by convention aws_s3_bucket_<setting>.<x> belongs to aws_s3_bucket.<x>
+      # (e.g. aws_s3_bucket_public_access_block.loki -> aws_s3_bucket.loki).
+      local bucket
+      bucket=$(field "$r" .after.bucket)
+      [[ -n "$bucket" ]] || bucket=$(resolved "aws_s3_bucket.${name}")
+      [[ -n "$bucket" ]] || return 0
+      case "$type" in
+        aws_s3_bucket_public_access_block)
+          aws s3api get-public-access-block --bucket "$bucket" >/dev/null 2>&1 && echo "$bucket" ;;
+        aws_s3_bucket_server_side_encryption_configuration)
+          aws s3api get-bucket-encryption --bucket "$bucket" >/dev/null 2>&1 && echo "$bucket" ;;
+        aws_s3_bucket_versioning)
+          [[ -n $(aws_q s3api get-bucket-versioning --bucket "$bucket" --query Status) ]] && echo "$bucket" ;;
+        aws_s3_bucket_lifecycle_configuration)
+          aws s3api get-bucket-lifecycle-configuration --bucket "$bucket" >/dev/null 2>&1 && echo "$bucket" ;;
+        aws_s3_bucket_policy)
+          aws s3api get-bucket-policy --bucket "$bucket" >/dev/null 2>&1 && echo "$bucket" ;;
+        *) log "  no lookup defined for $type: it will be created (add a case to generate-imports.sh if it already exists)" ;;
+      esac ;;
   esac
   return 0
 }
@@ -290,16 +333,13 @@ cat <<EOF
 EOF
 
 while IFS= read -r row; do
-  case "$(field "$row" .type)" in
-    aws_route_table_association | aws_sns_topic_policy) continue ;;
-  esac
+  is_dependent "$(field "$row" .type)" && continue
   emit "$row" "$(lookup "$row")"
 done <"$TMP/resources.jsonl"
 
 while IFS= read -r row; do
-  case "$(field "$row" .type)" in
-    aws_route_table_association | aws_sns_topic_policy) emit "$row" "$(lookup_dependent "$row")" ;;
-  esac
+  is_dependent "$(field "$row" .type)" || continue
+  emit "$row" "$(lookup_dependent "$row")"
 done <"$TMP/resources.jsonl"
 
 log "Found $found of $total planned resources already in AWS (import blocks written)."
