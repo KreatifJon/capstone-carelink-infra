@@ -173,7 +173,7 @@ terraform apply
 This provisions:
 
 1. The AWS IAM OpenID Connect Provider (token.actions.githubusercontent.com).
-2. The remote S3 state bucket with AES256 encryption, bucket versioning, and public access blocks.
+2. The remote S3 state bucket with AES256 encryption, bucket versioning, public access blocks, and a bucket policy that lets only the pipeline roles write the state.
 3. IAM Roles: carelink-github-staging-role and carelink-github-production-role.
 4. GitHub Environments: staging and production (with manual approval gate on production).
 5. GitHub Environment Variables: AWS_ROLE_ARN pointing to the respective IAM roles.
@@ -208,6 +208,8 @@ Making Infrastructure Changes
   ⚬ Terraform Plan (staging)
   ⚬ Terraform Plan (production)
 5. Once approved and checks pass, merge the Pull Request.
+
+Only the pipeline applies changes. The state bucket's policy lets only the two GitHub pipeline roles write the staging and production state, so a `terraform apply` from a laptop stops with `AccessDenied` while taking the state lock, before it changes anything. To preview a change locally, run `terraform plan -lock=false`. The break-glass procedure is in the comments of `oicd-bootstrap/main.tf`.
 
 Production Promotion
 
