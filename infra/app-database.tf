@@ -31,7 +31,7 @@ locals {
 }
 
 # ------------------------------------------------------------------------------
-# IAM role for External Secrets Operator (IRSA): read the app DB secret only
+# IAM role for External Secrets Operator (IRSA): read the app DB and Grafana secrets only
 # ------------------------------------------------------------------------------
 data "aws_iam_policy_document" "external_secrets_assume_role" {
   statement {
@@ -68,8 +68,10 @@ data "aws_iam_policy_document" "external_secrets" {
   statement {
     sid     = "ReadAppDatabaseAndGrafanaSecrets"
     actions = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-    resources = [local.app_db.master_user_secret[0].secret_arn,
-    "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.observability.account_id}:secret:${local.name_prefix}-grafana-admin-*"]
+    resources = [
+      local.app_db.master_user_secret[0].secret_arn,
+      aws_secretsmanager_secret.grafana_admin.arn, # observability-grafana.tf
+    ]
   }
 
   statement {
