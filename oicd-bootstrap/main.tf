@@ -132,6 +132,106 @@ resource "aws_s3_bucket_public_access_block" "tf_state_block_public" {
 }
 
 # -----------------------------------------------------------------------------
+# 1b. ONLY THE PIPELINES MAY CHANGE THE SHARED STATE
+# -----------------------------------------------------------------------------
+# Every change to staging and production goes through the reviewed pipeline.
+# Before Terraform changes anything it writes a lock file into this bucket
+# (<env>/terraform.tfstate.tflock), so denying writes here stops a
+# `terraform apply` from a laptop before it touches AWS. Reading stays
+# allowed, so a local `terraform plan -lock=false` still works.
+#
+# Who may still write:
+#   - each GitHub pipeline role, but only its own environment's state
+#   - AWSNukeAdminRole, the course's nightly cleanup (not ours to block)
+#   - anyone in var.state_break_glass_principal_arns (empty by default)
+#
+# Break-glass, e.g. `terraform force-unlock` after a cancelled pipeline run:
+#   terraform apply -var='state_break_glass_principal_arns=["<your IAM ARN>"]'
+#   ...fix the state...
+#   terraform apply   # removes the exception again
+#
+# This is a guard rail against accidents: an account admin can still remove
+# the policy (CloudTrail records it) and the next bootstrap apply restores it.
+
+variable "state_break_glass_principal_arns" {
+  description = "IAM principals temporarily allowed to write the Terraform state (break-glass only). Keep empty."
+  type        = list(string)
+  default     = []
+}
+
+locals {
+  state_write_actions = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+  cleanup_role_arn    = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/AWSNukeAdminRole"
+}
+
+data "aws_iam_policy_document" "tf_state" {
+  statement {
+    sid       = "OnlyThePipelinesWriteState"
+    effect    = "Deny"
+    actions   = local.state_write_actions
+    resources = ["${aws_s3_bucket.tf_state.arn}/*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "ArnNotLike"
+      variable = "aws:PrincipalArn"
+      values = concat(
+        [aws_iam_role.staging.arn, aws_iam_role.production.arn, local.cleanup_role_arn],
+        var.state_break_glass_principal_arns,
+      )
+    }
+  }
+
+  statement {
+    sid       = "StagingPipelineCannotWriteProductionState"
+    effect    = "Deny"
+    actions   = local.state_write_actions
+    resources = ["${aws_s3_bucket.tf_state.arn}/production/*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:PrincipalArn"
+      values   = [aws_iam_role.staging.arn]
+    }
+  }
+
+  statement {
+    sid       = "ProductionPipelineCannotWriteStagingState"
+    effect    = "Deny"
+    actions   = local.state_write_actions
+    resources = ["${aws_s3_bucket.tf_state.arn}/staging/*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:PrincipalArn"
+      values   = [aws_iam_role.production.arn]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "tf_state" {
+  bucket = aws_s3_bucket.tf_state.id
+  policy = data.aws_iam_policy_document.tf_state.json
+
+  # S3 rejects a policy change while the public access block is being updated.
+  depends_on = [aws_s3_bucket_public_access_block.tf_state_block_public]
+}
+
+# -----------------------------------------------------------------------------
 # 2. ENVIRONMENT-BASED IAM ROLES & POLICIES
 # -----------------------------------------------------------------------------
 
