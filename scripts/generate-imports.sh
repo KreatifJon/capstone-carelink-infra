@@ -225,6 +225,13 @@ lookup() { # prints the import ID for one resource, or nothing if it does not ex
       bucket=$(field "$r" .after.bucket)
       [[ -n "$bucket" ]] && aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1 && echo "$bucket" ;;
 
+    # ---- secrets -----------------------------------------------------------------
+    aws_secretsmanager_secret)
+      # Only the secret itself: its value stays out of the state. A secret that is
+      # scheduled for deletion cannot be adopted (restore it first).
+      [[ -n "$name" && -z $(aws_q secretsmanager describe-secret --secret-id "$name" --query DeletedDate) ]] &&
+        aws_q secretsmanager describe-secret --secret-id "$name" --query ARN ;;
+
     # ---- monitoring --------------------------------------------------------------
     aws_cloudwatch_log_group)
       aws_q logs describe-log-groups --log-group-name-prefix "$name" --query "logGroups[?logGroupName=='$name'] | [0].logGroupName" ;;
@@ -251,6 +258,7 @@ lookup() { # prints the import ID for one resource, or nothing if it does not ex
 
     # ---- never imported --------------------------------------------------------------
     aws_ec2_tag) ;; # creating a tag that already exists is harmless
+    terraform_data) ;; # no AWS object; its provisioner checks before it changes anything
     *) log "  no lookup defined for $type: it will be created (add a case to generate-imports.sh if it already exists)" ;;
   esac
   return 0
