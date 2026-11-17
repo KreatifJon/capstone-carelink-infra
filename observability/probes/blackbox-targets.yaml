@@ -1,0 +1,26 @@
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: carelink-staging-health
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+
+spec:
+  jobName: carelink-staging-health
+  interval: 30s
+  scrapeTimeout: 10s
+  module: http_200
+
+  prober:
+    url: carelink-blackbox-exporter.monitoring.svc.cluster.local:9115
+    scheme: http
+    path: /probe
+
+  targets:
+    staticConfig:
+      static:
+        - https://carelink-staging.sctp-sandbox.com/actuator/health
+      labels:
+        environment: staging
+        service: carelink
