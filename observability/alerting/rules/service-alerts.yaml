@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: carelink-service-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: carelink.staging.services
+      rules:
+        - alert: CareLinkServiceReplicaRedundancyLost
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="staging",
+              deployment=~"api-gateway|customers-service|vets-service|visits-service"
+            } < 2
+          for: 5m
+          labels:
+            severity: page
+            environment: staging
+          annotations:
+            summary: "CareLink service has fewer than two available replicas"
+            description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has fewer than two available replicas for 5 minutes. Investigate pod health, scheduling and node capacity."
+
+        - alert: CareLinkStagingHealthProbeFailed
+          expr: |
+            probe_success{
+              environment="staging",
+              service="carelink"
+            } == 0
+          for: 2m
+          labels:
+            severity: page
+            environment: staging
+            service: carelink
+          annotations:
+            summary: "CareLink staging external health probe failed"
+            description: "The external CareLink staging health endpoint has failed consecutive probes for 2 minutes. Check the ALB, ingress and API Gateway."

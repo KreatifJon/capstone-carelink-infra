@@ -1,0 +1,37 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: carelink-slo-recording-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: carelink.staging.availability
+      interval: 30s
+      rules:
+        - record: carelink:staging:probe_success:ratio
+          expr: |
+            avg by (environment, service) (
+              probe_success{
+                environment="staging",
+                service="carelink"
+              }
+            )
+
+        - record: carelink:staging:probe_failure:ratio
+          expr: |
+            1 - carelink:staging:probe_success:ratio
+
+    - name: carelink.staging.probe_latency
+      interval: 30s
+      rules:
+        - record: carelink:staging:probe_latency:p95
+          expr: |
+            quantile_over_time(
+              0.95,
+              probe_duration_seconds{
+                environment="staging",
+                service="carelink"
+              }[5m]
+            )
